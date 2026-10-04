@@ -235,7 +235,10 @@ The [Python fixture codec and tests](https://github.com/connorslab/sideflash/tre
 cover v1 signatures, canonical encoding, mutations, migration boundaries and
 synthetic QR decoding at M/Q levels in both cases. They use expected fixture
 authorities and are not a general native-policy or full BOLT12 validator.
-The Rust ASP/wallet prototypes still implement v0; v1 migration is outstanding.
+The Rust ASP/wallet feature branches now create v1 and preserve v0 decoding.
+Six codec tests and workspace checks pass in each; the wallet feature-enabled
+build passes. The shared fixtures agree across Python and Rust. These changes
+are not deployed in stable releases.
 Physical camera testing and independently implemented v1 validation remain open.
 
 Existing payment/recovery primitives have separate isolated test evidence. They
