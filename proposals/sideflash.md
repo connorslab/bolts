@@ -47,50 +47,64 @@ Implementations must distinguish address support from payment-delivery support.
 
 ## Address envelope
 
-The current development profile uses Bech32m with HRP `sfl` around a deterministic
-CBOR map. It limits text to 1023 ASCII characters and payloads to 633 bytes. This
-exceeds the original 90-character address convention but remains within the
-Bech32m code length. Encodings longer than the limit require a future profile;
-they must not be truncated or silently converted into online lookups.
+The compact development profile v1 uses Bech32m with HRP `sfl` around a
+deterministic CBOR array. Text is limited to 1023 ASCII characters and payloads
+to 633 bytes. This exceeds the original 90-character convention. Oversized
+addresses MUST fail; no truncation or resolver fallback is permitted.
 
-The following table records the implemented development encoding, not an assigned
-stable format. CBOR uses definite lengths, shortest integer/length forms and
-ascending unsigned integer keys. Duplicate keys, extra keys and trailing data
-are invalid. Amounts are not encoded in this envelope.
+The array has exactly 11 elements. Use definite lengths, shortest integer/length
+forms, no tags and no trailing data. Unsigned integers are bounded to uint64;
+booleans are not integers. Amounts are not encoded in the envelope.
 
-| Key | CBOR type | Development meaning |
+| Index | CBOR type | Development meaning |
 | --- | --- | --- |
-| 0 | unsigned integer | Version, currently 0 |
-| 1 | unsigned integer | Required envelope features, currently 0 |
-| 2 | byte string, 32 bytes | Genesis hash in Lightning chain-hash byte order |
-| 3 | byte string, 32 bytes | Explicit fork/profile discriminator |
-| 4 | byte string, 33 bytes | Compressed destination service identity key |
-| 5 | byte string | Native destination; see cross-compatibility profile |
-| 6 | byte string | Exact decoded BOLT12 offer TLV bytes |
-| 7 | unsigned integer | Binding revision |
-| 8 | unsigned integer | Inclusive validity start, Unix seconds |
-| 9 | unsigned integer | Exclusive expiry, Unix seconds |
-| 10 | byte string, 64 bytes | Recipient BIP340 authorization |
-| 11 | byte string, 64 bytes | Service BIP340 acknowledgment |
+| 0 | uint64 | Version: 1 |
+| 1 | uint64 | Required envelope features: 0 |
+| 2 | uint64 | Built-in network profile: 0 or 1 |
+| 3 | bytes, 33 | Compressed destination service identity key |
+| 4 | bytes | Native destination; see cross-compatibility profile |
+| 5 | bytes | Complete, exact BOLT12 offer TLV bytes |
+| 6 | uint64 | Binding revision |
+| 7 | uint64 | Inclusive validity start, Unix seconds |
+| 8 | uint64 | Exclusive expiry, Unix seconds |
+| 9 | bytes, 64 | Recipient BIP340 authorization |
+| 10 | bytes, 64 | Service BIP340 acknowledgment |
 
-The development discriminator is SHA256 of the ASCII bytes
-`Sideflash/XBT/blake2b-unified-sighash/v0`, without a terminating NUL. Mainnet and
-regtest use their respective genesis hashes with this discriminator. Other test
-networks are not supported by this profile. This is a proposed application-level
-identifier, not a globally assigned chain identifier or a transaction sighash.
+Network assignments are local to this experimental v1 profile, not globally
+allocated chain IDs. Implementations MUST embed the table below and reject
+unknown codes; no online lookup is involved. Each assignment includes the fork
+discriminator `d0566e5a56534f7a0b10e91d69a18290c8a00079e9084b22966f8cacfde230ab`,
+SHA256 of ASCII `Sideflash/XBT/blake2b-unified-sighash/v0` without NUL.
+
+| Code | Network | Genesis, Lightning chain-hash byte order |
+| --- | --- | --- |
+| 0 | bitcoin (XBT) mainnet | `6fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000` |
+| 1 | isolated bitcoin (XBT) regtest | `06226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f` |
+
+The assignments MUST NOT be reinterpreted within v1. Other test networks are
+unsupported. Readers expand the profile locally and compare it with configured
+chain context, native network and offer chain; genesis alone is insufficient.
+This does not remove any BOLT12 identity-feature checks.
+
+Legacy v0 uses a 12-entry CBOR map with explicit genesis/discriminator hashes.
+Its [frozen definition](https://github.com/connorslab/sideflash/blob/main/docs/address-v0.md)
+and [vectors](sideflash/vectors-v0.json) remain available. Multi-version readers
+MUST dispatch on container and explicit version, reject unsupported combinations,
+and MUST NOT reinterpret or silently downgrade an address. V1 requires new
+recipient and service signatures; copying v0 signatures is invalid.
 
 ## Authentication
 
-Let `C(n)` be the canonical CBOR map containing fields 0 through n, with its map
-length encoded accordingly. The development signature digests are:
+Let `A(n)` be the canonical CBOR array containing the first n elements, with
+its array length encoded as n. The development signature digests are:
 
 ```
-recipient_digest = SHA256("Sideflash/recipient/v0" || 0x00 || C(9))
-service_digest   = SHA256("Sideflash/server/v0"    || 0x00 || C(10))
+recipient_digest = SHA256("Sideflash/recipient/v1" || 0x00 || A(9))
+service_digest   = SHA256("Sideflash/server/v1"    || 0x00 || A(10))
 ```
 
-Field 10 signs `recipient_digest` under the native destination's receiving
-authority. Field 11 signs `service_digest` under field 4's x-only key. The service
+Element 9 signs `recipient_digest` under the native destination's receiving
+authority. Element 10 signs `service_digest` under element 3's x-only key. The service
 acknowledgment therefore commits to the recipient signature as well as the
 destinations. The service does not need the recipient's secret key.
 
@@ -103,7 +117,7 @@ question before a stable encoding is selected.
 
 An address writer:
 
-- MUST set the version and required-envelope-feature fields to 0 for this profile.
+- MUST set version to 1 and required-envelope-features to 0 for this profile.
 - MUST encode the fields using the canonical rules above and respect both limits.
 - MUST include a structurally valid offer with the correct chain and required
   network features under [BOLT12](../12-offer-encoding.md).
@@ -121,7 +135,7 @@ An address reader:
 - MUST reject input above the text limit before decoding and above the payload
   limit before parsing nested fields or invoking an offer parser.
 - MUST reject an incorrect HRP/checksum, mixed case, invalid padding, invalid
-  field types or lengths, noncanonical CBOR, duplicate/extra keys or trailing data.
+  field types or lengths, noncanonical CBOR, extra/missing elements or trailing data.
 - MUST reject unsupported versions, required features or native receiving policies.
 - MUST reject a chain/profile mismatch, expired or not-yet-valid binding.
 - MUST reject an invalid recipient signature or service acknowledgment.
@@ -141,7 +155,7 @@ wire profile contains no resolver URL, redirect or delegated binding authority.
 ## Lightning payment behavior
 
 After successful verification, a Lightning wallet reconstructs an ordinary
-`lno1` offer from field 6 using BOLT12's encoding, without adding the envelope's
+`lno1` offer from element 5 using BOLT12's encoding, without adding the envelope's
 Bech32m checksum to the offer. It requests and validates a fresh invoice through
 the normal BOLT12 flow. Existing chain, feature, amount, expiry and signature
 requirements remain in force. In particular, the envelope's discriminator is
@@ -161,7 +175,7 @@ security requirement, not a property obtained from the address signatures.
 
 ## Cross-compatibility profile
 
-The current prototype uses an Ark pubkey destination as its native route. Field 5
+The current prototype uses an Ark pubkey destination as its native route. Element 4
 contains a network byte (0 for mainnet, 1 for regtest), a native policy-address
 version byte (1), and the canonical native address payload without its HRP,
 five-bit version or checksum. That payload contains the service fingerprint,
@@ -190,8 +204,8 @@ authenticate the recipient channel or otherwise pin the intended destination.
 
 An embedded offer can become unavailable or revoked before envelope expiry.
 Revision fields alone do not prove freshness or prevent a malicious service from
-equivocating. Refusal must not cause fallback to an unrelated offer. A future
-resolution mechanism needs authenticated freshness and explicit rotation rules.
+equivocating. Refusal must not cause fallback to an unrelated offer. Fresh-status checks during payment preparation need authenticated responses
+and explicit rotation rules; they do not require an address-resolution service.
 
 Reusable addresses are linkable. Blinded offer paths do not conceal the signed
 service identity or native destination from a reader. The current profile is not
@@ -203,15 +217,26 @@ services. This proposal does not authorize requests to arbitrary network URLs.
 
 ## Implementation and test evidence
 
-[JSON fixtures](sideflash/vectors.json) contain frozen mainnet and regtest
-development addresses. They use known test keys and expired validity intervals;
-never send money to them. `verify_at` specifies the historical test clock.
+[V1 JSON fixtures](sideflash/vectors.json) contain frozen mainnet and regtest
+addresses with newly computed signatures. They use known public test keys and
+expired validity intervals; never send money to them. `verify_at` specifies the
+historical test clock. The complete offers and native destinations match v0.
 
-The [prototype and Python fixture checker](https://github.com/connorslab/sideflash)
-agree on canonical bytes, signatures and extraction. The checker uses fixture
-keys as expected authorities and is not a complete independent policy parser.
-Synthetic QR decoding passes for both case forms at M and Q correction levels;
-physical camera testing remains outstanding.
+| Fixture | Legacy v0 | Compact v1 |
+| --- | --- | --- |
+| Mainnet | 563 bytes / 911 characters | 484 bytes / 785 characters |
+| Regtest | 598 bytes / 967 characters | 519 bytes / 841 characters |
+
+These examples save 79 bytes (67 from network-field encoding, 12 from map keys),
+or 126 characters, without omitting either signature or any offer data. Lengths
+vary with offers and integer widths. Offline offer extraction is preserved.
+
+The [Python fixture codec and tests](https://github.com/connorslab/sideflash/tree/main/tests)
+cover v1 signatures, canonical encoding, mutations, migration boundaries and
+synthetic QR decoding at M/Q levels in both cases. They use expected fixture
+authorities and are not a general native-policy or full BOLT12 validator.
+The Rust ASP/wallet prototypes still implement v0; v1 migration is outstanding.
+Physical camera testing and independently implemented v1 validation remain open.
 
 Existing payment/recovery primitives have separate isolated test evidence. They
 do not establish an end-to-end Sideflash payment. No two independently developed
@@ -225,7 +250,8 @@ complete Sideflash implementations or independent security audit are claimed.
 3. Should authentication use tagged hashes and a more general recipient-policy
    identifier? Any change needs a new development profile and vectors.
 4. How should full service identity be authenticated in minimal Lightning clients?
-5. Can a compact format support larger blinded offers without mandatory lookups?
+5. Can further lossless compaction support larger blinded offers while retaining
+   fully embedded destinations and both authorizations?
 6. What fresh-status and receiver-managed-delivery requirements are necessary
    before a wallet can advertise safe cross-compatibility?
 
